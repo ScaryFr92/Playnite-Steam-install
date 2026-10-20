@@ -74,7 +74,7 @@ namespace SilentInstall.Installers
                          $"to {steamAppsPath}, installdir={installDir}");
 
                 WriteAppManifest(acfPath, game.GameId, installDir);
-                RestartSteamSilently();
+                TriggerOrRestartSteam(acfPath);
 
                 api.Notifications.Add(new NotificationMessage(
                     $"si-steam-{game.GameId}",
@@ -95,6 +95,42 @@ namespace SilentInstall.Installers
         }
 
         // ── Private helpers ───────────────────────────────────────────────
+
+        /// <summary>
+        /// Opens steam://open/downloads and waits up to 30 s for Steam to pick up the new ACF.
+        /// Only falls back to a full Steam restart if StateFlags stays at 1026 (Steam didn't detect it).
+        /// </summary>
+        private static void TriggerOrRestartSteam(string acfPath)
+        {
+            // Signal Steam to check its download queue
+            Process.Start(new ProcessStartInfo("steam://open/downloads") { UseShellExecute = true });
+
+            var deadline = DateTime.Now.AddSeconds(30);
+            while (DateTime.Now < deadline)
+            {
+                Thread.Sleep(2000);
+
+                try
+                {
+                    if (!File.Exists(acfPath)) continue;
+                    var content = File.ReadAllText(acfPath);
+                    var m = Regex.Match(content, "\"StateFlags\"\\s*\"(\\d+)\"");
+                    if (!m.Success) continue;
+
+                    // Steam updated StateFlags away from our initial 1026 → it picked it up without restart
+                    if (int.Parse(m.Groups[1].Value) != 1026)
+                    {
+                        Log.Info("[SilentInstall] Steam picked up ACF without restart.");
+                        return;
+                    }
+                }
+                catch { /* keep polling */ }
+            }
+
+            // Steam didn't react — do a silent restart
+            Log.Info("[SilentInstall] Steam did not detect ACF; performing silent restart.");
+            RestartSteamSilently();
+        }
 
         private static void WriteAppManifest(string acfPath, string appId, string installDir)
         {
