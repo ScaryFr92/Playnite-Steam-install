@@ -86,9 +86,12 @@ jobs:
 
             ## What's new in v${{ steps.version.outputs.VERSION }}
 
-            - ⚡ No-restart trigger — tries `steam://open/downloads` first, falls back to Steam restart after 20 s
-            - 🗑 Removed custom uninstall button — defers to Playnite/Steam native uninstall
-            - 🎮 Playnite addon browser compatibility — `.pext` package, corrected metadata
+            - 🎯 **Library picker at install time** — choose which Steam library to use each time you click Install, no more editing a config file
+            - 🔕 **Silent mode** — uncheck "Ask every time" to use a default library without any dialog
+            - 📊 **Download progress notifications** — shows GB downloaded / total and % in Playnite's notification area, updated every 5%
+            - 🔧 **StateFlags fix** — correctly detects fully installed state, no false positives during staging/committing
+            - 🗑 **Uninstall improved** — searches all Steam libraries to find and remove the ACF and game folder
+            - 🔄 **Code cleanup** — shared `SteamHelper` class, no duplicate logic
 
             ---
 
@@ -124,9 +127,12 @@ jobs:
           body: |
             ## What's new in v${{ steps.version.outputs.VERSION }}
 
-            - ⚡ No-restart trigger — tries `steam://open/downloads` first, falls back to Steam restart after 20 s
-            - 🗑 Removed custom uninstall button — defers to Playnite/Steam native uninstall
-            - 🎮 Playnite addon browser compatibility — `.pext` package, corrected metadata
+            - 🎯 **Library picker at install time** — choose which Steam library to use each time you click Install, no more editing a config file
+            - 🔕 **Silent mode** — uncheck "Ask every time" in settings to use a default library without any dialog
+            - 📊 **Download progress notifications** — shows GB downloaded / total and % in Playnite's notification area, updated every 5%
+            - 🔧 **StateFlags fix** — correctly detects fully installed state, no false positives during staging/committing
+            - 🗑 **Uninstall improved** — searches all Steam libraries to find and remove the ACF and game folder
+            - 🔄 **Code cleanup** — shared `SteamHelper` class, no duplicate logic
 
             ---
 

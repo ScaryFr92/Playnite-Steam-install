@@ -25,5 +25,8 @@ namespace SilentInstall.Settings
             if (dialog.ShowDialog() == SWF.DialogResult.OK)
                 _settings.CustomPath = dialog.SelectedPath;
         }
+
+        private void RefreshLibraries_Click(object sender, RoutedEventArgs e)
+            => _settings.RefreshDetectedLibraries();
     }
 }

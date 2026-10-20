@@ -1,18 +1,15 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
-using System.Net;
 using System.Text.RegularExpressions;
 using System.Threading;
-using Microsoft.Win32;
-using Playnite.SDK;
 using Playnite.SDK;
 using Playnite.SDK.Models;
-using SilentInstall.Settings;
 
 namespace SilentInstall.Installers
 {
+    public enum InstallResult { Started, AlreadyQueued, AlreadyInstalled, Failed }
+
     /// <summary>
     /// Handles silent Steam game installation using the appmanifest trick.
     ///
@@ -20,157 +17,103 @@ namespace SilentInstall.Installers
     ///   Steam monitors its steamapps folders at startup. When it finds an
     ///   appmanifest file with StateFlags=1026 ("update started + required"),
     ///   it automatically begins downloading the game — no dialog, no interaction.
-    ///
-    /// References:
-    ///   https://github.com/pinkwah/steam-appmanifest
     /// </summary>
     public static class SteamInstaller
     {
+        private static readonly ILogger Log = LogManager.GetLogger();
         public static readonly Guid SteamPluginId = Guid.Parse("cb91dfc9-b977-43bf-8e70-55f46e410fab");
 
         public static bool CanHandle(Game game) => game.PluginId == SteamPluginId;
 
         /// <summary>
-        /// Installs a Steam game silently:
-        /// 1. Ensures the steamapps folder is registered in Steam's library config
-        /// 2. Creates an appmanifest file with StateFlags=1026
-        /// 3. Restarts Steam silently so it picks up the new manifest
+        /// Queues a Steam game for silent installation.
+        /// Returns the result so the caller can decide whether to start monitoring.
         /// </summary>
-        /// <param name="targetLibraryPath">
-        /// Steamapps folder to install into. Falls back to settings.SteamAppsPath if null.
-        /// </param>
-        public static void Install(Game game, PluginSettings settings, IPlayniteAPI api,
-                                   string targetLibraryPath = null)
+        public static InstallResult Install(Game game, string steamAppsPath, IPlayniteAPI api)
         {
             try
             {
-                var libraryPath = !string.IsNullOrEmpty(targetLibraryPath)
-                    ? targetLibraryPath
-                    : settings.SteamAppsPath;
+                if (!Directory.Exists(steamAppsPath))
+                    throw new InvalidOperationException($"steamapps folder not found: {steamAppsPath}");
 
-                SilentLogger.Info($"[{game.Name}] Preparing install in: {libraryPath}");
-                ValidateLibraryPath(libraryPath);
+                var acfPath = Path.Combine(steamAppsPath, $"appmanifest_{game.GameId}.acf");
 
-                // Make sure this library is registered in Steam's libraryfolders.vdf
-                EnsureSteamLibraryRegistered(libraryPath);
-
-                var acfPath    = Path.Combine(libraryPath, $"appmanifest_{game.GameId}.acf");
-                var installDir = FetchInstallDirFromSteamApi(game.GameId, game.Name);
-
-                SilentLogger.Info($"[{game.Name}] installdir resolved to: {installDir}");
-
+                // If an ACF already exists inspect it before overwriting
                 if (File.Exists(acfPath))
                 {
-                    SilentLogger.Warn($"[{game.Name}] ACF already exists — install already in progress.");
-                    return;
+                    var existing = File.ReadAllText(acfPath);
+                    var fm = Regex.Match(existing, "\"StateFlags\"\\s*\"(\\d+)\"");
+                    if (fm.Success)
+                    {
+                        int flags = int.Parse(fm.Groups[1].Value);
+                        if ((flags & 4) != 0)
+                        {
+                            api.Notifications.Add(new NotificationMessage(
+                                $"si-steam-already-{game.GameId}",
+                                $"\u2705 {game.Name} \u2014 already installed.",
+                                NotificationType.Info));
+                            return InstallResult.AlreadyInstalled;
+                        }
+                        // Already in Steam's queue — start monitoring but skip Steam restart
+                        api.Notifications.Add(new NotificationMessage(
+                            $"si-steam-{game.GameId}",
+                            $"\u2b07 {game.Name} \u2014 already queued in Steam. Monitoring\u2026",
+                            NotificationType.Info));
+                        return InstallResult.AlreadyQueued;
+                    }
                 }
 
-                WriteAppManifest(acfPath, game.GameId, installDir);
-                SilentLogger.Info($"[{game.Name}] ACF written: {acfPath}");
+                EnsureSteamLibraryRegistered(steamAppsPath);
 
-                TriggerDownloadOrRestart(libraryPath, game.GameId);
-                SilentLogger.Info($"[{game.Name}] Download trigger complete.");
+                // Resolve installdir from existing ACFs first (fast, local, reliable).
+                // Falls back to sanitized game name — Steam will update it to the real path anyway.
+                var installDir = SteamHelper.FindInstallDir(game.GameId)
+                    ?? SanitizeDirectoryName(game.Name);
+
+                Log.Info($"[SilentInstall] Installing {game.Name} (appid={game.GameId}) " +
+                         $"to {steamAppsPath}, installdir={installDir}");
+
+                WriteAppManifest(acfPath, game.GameId, installDir);
+                RestartSteamSilently();
 
                 api.Notifications.Add(new NotificationMessage(
                     $"si-steam-{game.GameId}",
-                    $"⬇ {game.Name} — queued in Steam. Monitoring until complete…",
+                    $"\u2b07 {game.Name} \u2014 queued in Steam. Monitoring until complete\u2026",
                     NotificationType.Info));
+
+                return InstallResult.Started;
             }
             catch (Exception ex)
             {
-                SilentLogger.Error($"[{game.Name}] Install failed", ex);
+                Log.Error(ex, $"[SilentInstall] Install failed for {game.Name}");
                 api.Notifications.Add(new NotificationMessage(
                     $"si-steam-err-{game.GameId}",
                     $"Silent Install error: {ex.Message}",
                     NotificationType.Error));
+                return InstallResult.Failed;
             }
         }
 
         // ── Private helpers ───────────────────────────────────────────────
 
-        private static void ValidateLibraryPath(string libraryPath)
-        {
-            if (string.IsNullOrWhiteSpace(libraryPath))
-                throw new InvalidOperationException(
-                    "Steam library path is not configured. Open plugin settings and select a steamapps folder.");
-
-            if (!Directory.Exists(libraryPath))
-                throw new InvalidOperationException(
-                    $"steamapps folder not found: {libraryPath}");
-        }
-
-        /// <summary>
-        /// Creates the appmanifest ACF file.
-        /// StateFlags=1026 = "update started + update required" → Steam auto-downloads.
-        /// </summary>
         private static void WriteAppManifest(string acfPath, string appId, string installDir)
         {
-            var content =
-                "\"AppState\"\n" +
-                "{\n" +
+            File.WriteAllText(acfPath,
+                "\"AppState\"\n{\n" +
                 $"\t\"appid\"\t\t\"{appId}\"\n" +
                 $"\t\"Universe\"\t\"1\"\n" +
                 $"\t\"installdir\"\t\"{installDir}\"\n" +
                 $"\t\"StateFlags\"\t\"1026\"\n" +
-                "}\n";
-
-            File.WriteAllText(acfPath, content);
+                "}\n");
         }
 
         /// <summary>
-        /// Tries to trigger the download without restarting Steam first.
-        /// Modern Steam (post ~2022) watches steamapps/ for new ACF files and
-        /// may pick them up while running when the downloads page is opened.
-        ///
-        /// Strategy:
-        ///   1. Open steam://open/downloads (may trigger a rescan)
-        ///   2. Wait up to 20 seconds watching the downloading/ folder for activity
-        ///   3. If activity detected → no restart needed ✅
-        ///   4. If no activity → fall back to full restart
-        /// </summary>
-        private static void TriggerDownloadOrRestart(string steamAppsPath, string appId)
-        {
-            SilentLogger.Info($"[AppID {appId}] Attempting no-restart trigger via steam://open/downloads…");
-
-            // Step 1: open the downloads page — may cause Steam to rescan steamapps/
-            Process.Start("steam://open/downloads");
-
-            // Step 2: watch for activity in steamapps/downloading/<appid>/
-            var downloadingDir = Path.Combine(steamAppsPath, "downloading", appId);
-            var steamRoot      = GetSteamRootPath();
-            var downloadingDef = steamRoot != null
-                ? Path.Combine(steamRoot, "steamapps", "downloading", appId)
-                : null;
-
-            var deadline = DateTime.Now.AddSeconds(20);
-            while (DateTime.Now < deadline)
-            {
-                Thread.Sleep(2000);
-
-                bool activityLib = Directory.Exists(downloadingDir) &&
-                    new DirectoryInfo(downloadingDir).EnumerateFiles("*", SearchOption.AllDirectories).Any();
-                bool activityDef = downloadingDef != null && Directory.Exists(downloadingDef) &&
-                    new DirectoryInfo(downloadingDef).EnumerateFiles("*", SearchOption.AllDirectories).Any();
-
-                if (activityLib || activityDef)
-                {
-                    SilentLogger.Info($"[AppID {appId}] Download started without restart ✅ (lib={activityLib} def={activityDef})");
-                    return; // no restart needed
-                }
-            }
-
-            // Step 3: no activity detected — Steam didn't pick up the ACF; restart required
-            SilentLogger.Info($"[AppID {appId}] No activity detected — falling back to Steam restart…");
-            RestartSteamSilently();
-        }
-
-        /// <summary>
-        /// Shuts down Steam completely then restarts it silently (system tray only).
-        /// Fallback used when the no-restart trigger doesn't work.
+        /// Shuts Steam down completely then restarts it silently.
+        /// Uses process polling instead of fixed sleeps so it adapts to machine speed.
         /// </summary>
         private static void RestartSteamSilently()
         {
-            var steamExe = GetSteamExePath();
+            var steamExe = SteamHelper.GetExePath();
             if (steamExe == null || !File.Exists(steamExe)) return;
 
             // Send shutdown signal
@@ -182,23 +125,21 @@ namespace SilentInstall.Installers
                 CreateNoWindow  = true
             });
 
-            // Wait for all Steam processes to fully exit (up to 15 seconds)
-            var deadline = DateTime.Now.AddSeconds(15);
-            while (DateTime.Now < deadline)
+            // Wait for Steam to fully exit (up to 20 seconds)
+            var shutdownDeadline = DateTime.Now.AddSeconds(20);
+            while (DateTime.Now < shutdownDeadline)
             {
-                Thread.Sleep(1000);
+                System.Threading.Thread.Sleep(500);
                 if (Process.GetProcessesByName("steam").Length == 0) break;
             }
 
             // Force-kill any remaining Steam processes
-            foreach (var proc in Process.GetProcessesByName("steam"))
-            {
-                try { proc.Kill(); } catch { }
-            }
+            foreach (var p in Process.GetProcessesByName("steam"))
+                try { p.Kill(); } catch { }
 
-            Thread.Sleep(1500);
+            System.Threading.Thread.Sleep(1000);
 
-            // Restart with -silent (system tray only, no main window)
+            // Restart with -silent (system tray only)
             Process.Start(new ProcessStartInfo
             {
                 FileName        = steamExe,
@@ -207,104 +148,49 @@ namespace SilentInstall.Installers
                 CreateNoWindow  = true
             });
 
-            // Open downloads page to flush the queue
-            Thread.Sleep(4000);
-            Process.Start("steam://open/downloads");
-        }
-
-        /// <summary>
-        /// Queries the Steam Store API to get the official installation directory name.
-        ///
-        /// The Steam Store API returns the *localized* game name which can be in any
-        /// language (Russian, Chinese, etc.) — unsuitable as a directory name.
-        /// We sanitize it and fall back to the Playnite name if it looks garbled.
-        /// </summary>
-        private static string FetchInstallDirFromSteamApi(string appId, string fallbackName)
-        {
-            try
+            // Wait until Steam is back before opening the downloads page
+            var launchDeadline = DateTime.Now.AddSeconds(30);
+            while (DateTime.Now < launchDeadline)
             {
-                var url = $"https://store.steampowered.com/api/appdetails?appids={appId}&filters=basic&cc=us&l=english";
-                using (var client = new WebClient())
-                {
-                    client.Headers.Add("User-Agent", "Mozilla/5.0");
-                    client.Encoding = System.Text.Encoding.UTF8;
-                    var json  = client.DownloadString(url);
-                    var match = Regex.Match(json, "\"name\"\\s*:\\s*\"([^\"]+)\"");
-                    if (match.Success)
-                    {
-                        var apiName = SanitizeDirectoryName(match.Groups[1].Value);
-                        // Reject the result if it contains non-ASCII characters —
-                        // that means the API returned a localized (non-English) name
-                        // which would be wrong as a directory name on Windows.
-                        if (!string.IsNullOrWhiteSpace(apiName) && IsAsciiSafe(apiName))
-                            return apiName;
-                    }
-                }
+                System.Threading.Thread.Sleep(1000);
+                if (Process.GetProcessesByName("steam").Length > 0) break;
             }
-            catch { /* fall through to fallback */ }
 
-            return SanitizeDirectoryName(fallbackName);
-        }
-
-        /// <summary>Returns true if the string contains only ASCII printable characters.</summary>
-        private static bool IsAsciiSafe(string s)
-        {
-            foreach (char c in s)
-                if (c > 127) return false;
-            return true;
+            System.Threading.Thread.Sleep(1500); // brief extra for Steam to accept protocol URLs
+            Process.Start(new ProcessStartInfo("steam://open/downloads") { UseShellExecute = true });
         }
 
         /// <summary>
         /// Ensures the given steamapps folder is registered in Steam's libraryfolders.vdf.
-        /// This allows Playnite's Steam plugin to scan the folder during library updates.
         /// </summary>
         private static void EnsureSteamLibraryRegistered(string steamAppsDir)
         {
             try
             {
-                var steamRoot = GetSteamRootPath();
-                if (steamRoot == null) return;
+                var root = SteamHelper.GetRootPath();
+                if (root == null) return;
 
-                var vdf = Path.Combine(steamRoot, "steamapps", "libraryfolders.vdf");
+                var vdf = Path.Combine(root, "steamapps", "libraryfolders.vdf");
                 if (!File.Exists(vdf)) return;
 
-                // libraryfolders.vdf stores the parent of steamapps (e.g. E:\SteamLibrary)
                 var libraryRoot = Path.GetDirectoryName(steamAppsDir);
                 if (string.IsNullOrEmpty(libraryRoot)) return;
 
                 var content = File.ReadAllText(vdf);
                 var escaped = libraryRoot.Replace("\\", "\\\\");
-                if (content.Contains(escaped)) return; // already registered
+                if (content.Contains(escaped)) return;
 
-                // Find the next available index
                 var maxIdx = 0;
                 foreach (Match m in Regex.Matches(content, "\"(\\d+)\""))
                     if (int.TryParse(m.Groups[1].Value, out int idx) && idx > maxIdx)
                         maxIdx = idx;
 
-                var entry = $"\t\"{maxIdx + 1}\"\n\t{{\n\t\t\"path\"\t\t\"{escaped}\"\n\t}}\n";
+                var entry    = $"\t\"{maxIdx + 1}\"\n\t{{\n\t\t\"path\"\t\t\"{escaped}\"\n\t}}\n";
                 var insertAt = content.LastIndexOf('}');
                 if (insertAt > 0)
                     File.WriteAllText(vdf, content.Insert(insertAt, entry));
             }
-            catch { /* non-critical, skip silently */ }
-        }
-
-        private static string GetSteamExePath()
-        {
-            var root = GetSteamRootPath();
-            return root != null ? Path.Combine(root, "steam.exe") : null;
-        }
-
-        private static string GetSteamRootPath()
-        {
-            try
-            {
-                using (var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Valve\Steam")
-                    ?? Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Valve\Steam"))
-                    return key?.GetValue("InstallPath") as string;
-            }
-            catch { return null; }
+            catch { /* non-critical */ }
         }
 
         private static string SanitizeDirectoryName(string name)
