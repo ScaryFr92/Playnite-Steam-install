@@ -121,9 +121,10 @@ namespace SilentInstall
                 return _settings.SteamAppsPath;
             }
 
-            if (_api.ApplicationInfo.Mode == ApplicationMode.Fullscreen)
+            // "Always ask" off, or Fullscreen mode → use default silently
+            if (!_settings.AlwaysAskLibrary || _api.ApplicationInfo.Mode == ApplicationMode.Fullscreen)
             {
-                SilentLogger.Info($"[{Game.Name}] Fullscreen mode — skipping library picker, using default: {_settings.SteamAppsPath}");
+                SilentLogger.Info($"[{Game.Name}] Silent mode (AlwaysAsk={_settings.AlwaysAskLibrary}, mode={_api.ApplicationInfo.Mode}) — using default: {_settings.SteamAppsPath}");
                 return _settings.SteamAppsPath;
             }
 
@@ -470,21 +471,24 @@ namespace SilentInstall
                     SilentLogger.Warn($"[{Game.Name}] Game directory not found or empty: '{gameDir}' — skipping file deletion.");
                 }
 
-                var acfPath = System.IO.Path.Combine(_settings.SteamAppsPath, $"appmanifest_{Game.GameId}.acf");
-                SilentLogger.Info($"[{Game.Name}] Looking for ACF at: {acfPath}");
-                try
+                // Search every known library — the game may have been installed to any of them
+                bool acfFound = false;
+                foreach (var lib in _settings.DetectedSteamLibraries)
                 {
-                    if (System.IO.File.Exists(acfPath))
+                    var acfPath = System.IO.Path.Combine(lib.Path, $"appmanifest_{Game.GameId}.acf");
+                    SilentLogger.Info($"[{Game.Name}] Checking for ACF at: {acfPath}");
+                    try
                     {
+                        if (!System.IO.File.Exists(acfPath)) continue;
                         System.IO.File.Delete(acfPath);
-                        SilentLogger.Info($"[{Game.Name}] ACF deleted — Steam no longer tracks this game.");
+                        SilentLogger.Info($"[{Game.Name}] ACF deleted from {lib.Path} — Steam no longer tracks this game.");
+                        acfFound = true;
+                        break;
                     }
-                    else
-                    {
-                        SilentLogger.Info($"[{Game.Name}] ACF not found at expected path — already removed or different library.");
-                    }
+                    catch (Exception ex) { SilentLogger.Warn($"[{Game.Name}] Could not delete ACF in {lib.Path}: {ex.Message}"); }
                 }
-                catch (Exception ex) { SilentLogger.Warn($"[{Game.Name}] Could not delete ACF: {ex.Message}"); }
+                if (!acfFound)
+                    SilentLogger.Info($"[{Game.Name}] ACF not found in any library — already removed or never installed via this plugin.");
 
                 SilentLogger.Info($"[{Game.Name}] Uninstall complete. Calling InvokeOnUninstalled.");
                 InvokeOnUninstalled(new GameUninstalledEventArgs());

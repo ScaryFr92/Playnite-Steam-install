@@ -86,6 +86,10 @@ jobs:
             - 🔧 ACF kept after install — Steam now properly tracks the game for updates, overlay and achievements
             - 🪟 Steam restarts minimized to tray — no more window stealing focus on Moonlight/remote play
             - 🗑 Restored uninstall via Playnite — deletes game files and ACF cleanly
+            - 🎯 Library picker at install time — choose which Steam library per install; no more editing config files
+            - 🔕 Silent mode — uncheck "Ask every time" to always use the default library without a dialog
+            - 🗑 Uninstall now searches all Steam libraries for the ACF (works regardless of where the game was installed)
+            - ↻ Refresh button in settings to re-scan Steam libraries without restarting Playnite
 
             ---
 
@@ -125,6 +129,10 @@ jobs:
             - 🔧 ACF kept after install — Steam now properly tracks the game for updates, overlay and achievements
             - 🪟 Steam restarts minimized to tray — no more window stealing focus on Moonlight/remote play
             - 🗑 Restored uninstall via Playnite — deletes game files and ACF cleanly
+            - 🎯 Library picker at install time — choose which Steam library per install; no more editing config files
+            - 🔕 Silent mode — uncheck "Ask every time" to always use the default library without a dialog
+            - 🗑 Uninstall now searches all Steam libraries for the ACF (works regardless of where the game was installed)
+            - ↻ Refresh button in settings to re-scan Steam libraries without restarting Playnite
 
             ---
 

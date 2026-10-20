@@ -46,6 +46,14 @@ namespace SilentInstall.Settings
             set { _customPath = value; OnPropertyChanged(); OnPropertyChanged(nameof(SteamAppsPath)); }
         }
 
+        // When true a picker dialog appears at install time; when false the default library is used silently
+        private bool _alwaysAskLibrary = true;
+        public bool AlwaysAskLibrary
+        {
+            get => _alwaysAskLibrary;
+            set { _alwaysAskLibrary = value; OnPropertyChanged(); }
+        }
+
         /// <summary>The active steamapps path — either auto-detected or custom.</summary>
         [DontSerialize]
         public string SteamAppsPath => UseCustomPath && !string.IsNullOrWhiteSpace(_customPath)
@@ -65,10 +73,17 @@ namespace SilentInstall.Settings
                 UseCustomPath        = saved.UseCustomPath;
                 SelectedLibraryPath  = saved.SelectedLibraryPath;
                 CustomPath           = saved.CustomPath;
+                AlwaysAskLibrary     = saved.AlwaysAskLibrary;
             }
 
             if (string.IsNullOrEmpty(SelectedLibraryPath) && DetectedSteamLibraries.Count > 0)
                 SelectedLibraryPath = DetectedSteamLibraries[0].Path;
+        }
+
+        public void RefreshDetectedLibraries()
+        {
+            DetectSteamLibraries();
+            OnPropertyChanged(nameof(DetectedSteamLibraries));
         }
 
         private void DetectSteamLibraries()

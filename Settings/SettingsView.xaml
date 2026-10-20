@@ -54,21 +54,37 @@
             </StackPanel>
         </Border>
 
-        <!-- Library dropdown -->
+        <!-- Library picker behaviour -->
+        <StackPanel Margin="0,0,0,10">
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                <TextBlock Style="{StaticResource FieldLabel}" Text="Library selection"/>
+                <CheckBox Content="Ask every time I click Install"
+                          IsChecked="{Binding AlwaysAskLibrary}"
+                          Foreground="{DynamicResource TextBrush}"
+                          VerticalAlignment="Center"
+                          ToolTip="When checked, a dialog lets you pick the destination library each time. When unchecked, the default library below is used silently."/>
+            </StackPanel>
+            <TextBlock Style="{StaticResource HelpText}"
+                       Text="Recommended if you have multiple Steam libraries on different drives."/>
+        </StackPanel>
+
+        <!-- Default library dropdown -->
         <StackPanel Margin="0,0,0,6">
             <StackPanel Orientation="Horizontal">
-                <TextBlock Style="{StaticResource FieldLabel}" Text="Steam library"/>
-                <ComboBox Width="470"
+                <TextBlock Style="{StaticResource FieldLabel}" Text="Default library"/>
+                <ComboBox Width="434"
                           ItemsSource="{Binding DetectedSteamLibraries}"
                           DisplayMemberPath="Label"
                           SelectedValuePath="Path"
                           SelectedValue="{Binding SelectedLibraryPath}"
-                          ToolTip="Select the Steam library where games will be installed"/>
+                          ToolTip="Pre-selected in the install dialog. Also used when 'Ask every time' is unchecked."/>
+                <Button Content="↻" Click="RefreshLibraries_Click"
+                        Width="36" ToolTip="Re-scan Steam libraries"/>
             </StackPanel>
             <TextBlock Style="{StaticResource HelpText}"
                        Text="All your Steam libraries are detected automatically from Steam's configuration."/>
             <TextBlock Style="{StaticResource HelpText}" Margin="172,2,0,0"
-                       Text="If your target library is missing, add it first in Steam → Settings → Storage."/>
+                       Text="If your target library is missing, add it first in Steam → Settings → Storage, then click ↻."/>
         </StackPanel>
 
         <!-- Custom path checkbox + field -->
